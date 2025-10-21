@@ -1,0 +1,78 @@
+name: Build LineageOS 23 for herolte
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 720
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Prepare environment
+      run: |
+        sudo apt update
+        sudo apt install -y \
+          bc bison build-essential ccache curl flex g++-multilib \
+          gcc-multilib gnupg gperf imagemagick lib32ncurses5-dev \
+          lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev \
+          libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop \
+          openjdk-17-jdk pngcrush rsync schedtool squashfs-tools \
+          xsltproc zip zlib1g-dev git-core python3
+
+        echo "Environment ready!"
+
+    - name: Setup repo tool
+      run: |
+        mkdir -p ~/bin
+        curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+        chmod a+x ~/bin/repo
+        echo 'export PATH=~/bin:$PATH' >> ~/.bashrc
+        source ~/.bashrc
+
+    - name: Initialize LineageOS repo
+      run: |
+        mkdir -p $HOME/android/lineage
+        cd $HOME/android/lineage
+        ~/bin/repo init -u https://github.com/LineageOS/android.git -b lineage-23.0 --depth=1
+        ~/bin/repo sync -c -j4 --force-sync --no-clone-bundle --no-tags
+
+    - name: Clone device, kernel and vendor trees
+      run: |
+        cd $HOME/android/lineage
+        git clone --depth=1 https://github.com/LineageOS/android_device_samsung_herolte device/samsung/herolte || true
+        git clone --depth=1 https://github.com/LineageOS/android_kernel_samsung_universal8890 kernel/samsung/universal8890 || true
+        git clone --depth=1 https://github.com/TheMuppets/proprietary_vendor_samsung vendor/samsung || true
+
+    - name: Setup ccache
+      run: |
+        echo "max_size = 15.0G" > ~/.ccache/ccache.conf
+        export CCACHE_DIR=~/.ccache
+        export USE_CCACHE=1
+        ccache -M 15G
+        ccache -z
+        echo "ccache configured"
+
+    - name: Build LineageOS 23
+      run: |
+        cd $HOME/android/lineage
+        source build/envsetup.sh || { echo "build/envsetup.sh missing!"; exit 1; }
+        lunch lineage_herolte-userdebug || { echo "lunch failed!"; exit 1; }
+        make bacon -j$(nproc) || { echo "Build failed!"; exit 1; }
+
+    - name: List build output
+      if: success()
+      run: |
+        echo "Build completed! Output:"
+        ls -lh $HOME/android/lineage/out/target/product/herolte
+
+    - name: Upload ROM artifact
+      if: success()
+      uses: actions/upload-artifact@v4
+      with:
+        name: lineageos-herolte
+        path: $HOME/android/lineage/out/target/product/herolte/*.zip
+        retention-days: 7
